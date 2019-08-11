@@ -1,0 +1,105 @@
+---
+layout: post
+title: Using .NET Core for Docker Services
+---
+
+I recently implemented my first Docker image, intended to be used as a service: [Beehive](https://github.com/MikaelElkiaer/Beehive).
+I had previously used Topshelf to create .NET Windows services, but this time around I would like to create a .NET Core console app running as a service in a Linux-based image.
+This brought with it some interesting learnings.
+
+# Creating a service
+
+## Creating a stoppable service
+In the case of Beehive, I wanted to do an isolated loop, in order to not having to concern myself with managing state.
+I also wanted a way to stop the service, while having a chance to finish ongoing starts and perhaps do some cleaning up.
+In order to achieve this, I stumbled upon a neat little trick of combining a while loop and a `CancellationToken`.
+
+Simply, a `CancellationToken` is an object you can provide for any `Task` that you start, so that you can check for `.IsCancellationRequested` and either exit prematurely, but gracefully, or throw an `OperationCanceledException` via `ThrowIfCancellationRequested()`.
+Combining this with an async main function, we can create a cancellable endless loop:
+```csharp
+class Program
+{
+    static CancellationTokenSource tokenSource = new CancellationTokenSource();
+
+    async Task main(string[] args)
+    {
+        while (!tokenSource.IsCancellationRequested)
+        {
+            DoLogic();
+            if (ShouldExit())
+                tokenSource.Cancel();
+        }
+    }
+}
+```
+This is fine for handling logic-related reasons to exit.
+But for this to be a real system-controllable service, we also need for it to react to signals.
+
+First up is the `Console.CancelKeyPress` event, which is fired when hitting Ctrl+C - corresponding to a SIGINT on Linux.
+This is useful for gracefully stopping the program - while running it directly, or while running it as a non-detached container.
+In the event handler, it is neccesary to set `ConsoleCancelEventArgs.Cancel` to true.
+If it is kept at its default (false) it will kill the process once the event handler is finished.
+If set to true, we get to do a graceful exit via the CancellationToken.
+
+Next up is the `AppDomain.ProcessExit` event - corresponding to a SIGTERM on Linux.
+This is fired after the cancel, but more importantly it is also fired by itself on a SIGTERM - e.g. whenever a container is stopped or restarted by the Docker daemon.
+```csharp
+class Program
+{
+    static CancellationTokenSource tokenSource = new CancellationTokenSource();
+
+    async Task main(string[] args)
+    {
+        AppDomain.CurrentDomain.ProcessExit += CurrentDomain_ProcessExit;
+        Console.CancelKeyPress += Console_CancelKeyPress;
+        while (!tokenSource.IsCancellationRequested)
+        {
+            DoLogic();
+            if (ShouldExit())
+                tokenSource.Cancel();
+            await Task.Delay(TimeSpan.FromSeconds(10), tokenSource.Token);
+        }
+    }
+
+    static void CurrentDomain_ProcessExit(object sender, EventArgs e)
+    {
+        tokenSource.Cancel();
+    }
+   
+    static void Console_CancelKeyPress(object sender, ConsoleCancelEventArgs e)
+    {
+        e.Cancel = true;
+        tokenSource.Cancel();
+    }
+}
+```
+
+### Creating a non-loop service
+In other cases, it might not be neccesary with a loop to have the service go forever.
+Perhaps the service starts some background threads for subscribing to a message queue or another asynchronous communication form.
+
+For this it is possible to instead set up the background thread and then utilize `Task.Delay` again, but without an actual delay and instead only relying on the `CancellationToken` to stop the service.
+```csharp
+// ...
+async Task main(string[] args)
+{
+    AppDomain.CurrentDomain.ProcessExit += CurrentDomain_ProcessExit;
+    Console.CancelKeyPress += Console_CancelKeyPress;
+
+    SubscribeToQueue();
+
+    await Task.Delay(-1, tokenSource.Token);
+}
+// ...
+```
+
+## Logging
+
+
+## Configuration
+
+
+## Building
+
+
+## Deploying
