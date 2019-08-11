@@ -96,23 +96,59 @@ async Task main(string[] args)
 ## Logging
 This section is about Serilog and how to take advantage of it for a console application running inside a container.
 
-The biggest advantage, compared to others, is that it follows the concept of structured logging.
-You might not get the full advantage, while logging to stdout/stderr, compared to logging to something like Elasticsearch, but some of the advantages are still there.
-
-1. Nicely formatted entries with timestamp and error level
-
-2. Type-based logging - including complex types
-
+By using the simple Serilog configuration below, we get the following advantages right out-of-the-box:
+1. Structured (template-based) log events
+2. Multiple log levels (Verbose, Debug, Information, Warning, Error, Fatal)
 3. Logging to stderr and stdout
+4. Nicely formatted log entries with timestamp and error level
+5. Globally available or DI-driven ILogger
+6. Colored output
 
-4. Global or DI-driven ILogger
+A single package is needed to be installed: `Serilog.Sinks.Console`.
+In order to set it up I prefer the programmatic approach over using a config file:
+```csharp
+public static ILogger CreateLogger(LogEventLevel visibleLogLevel)
+{
+    return Log.Logger = new LoggerConfiguration()
+        .MinimumLevel.Is(visibleLogLevel)
+        .WriteTo.ColoredConsole(standardErrorFromLevel: LogEventLevel.Error)
+        .CreateLogger();
+}
+```
+Note the use of `standardErrorFromLevel` which needs to be set for log events of level Error and Fatal to be logged to stderr.
+It might also be useful to let the minimum log level be controlled via an environment variable - allowing the user of the service to determine the visible log level.
+Once that it is set up, all that needs to be done is use it - either via the globally available `Log.Logger` or by injecting the `ILogger` via a DI framework.
 
-5. Colored output
+### Example
+A log entry created as such:
+```csharp
+logger.Information("Log event at {StartUtc:o}", DateTime.UtcNow)
+```
+Will be outputted as:
+```
+2019-08-11 20:14:49 INF Log event at 2019-08-11T18:14:49.8269445Z
+```
 
 ## Configuration
-
+Docker services are easily controlled via environment variables.
+In .NET (Core) environment variables are read via `System.Environment` - typically via `Environment.GetEnvironmentVariable(KEYNAME)`.
+By using environment varibles for configuration, it is easy to create a single build and configure it for uses in different environments.
+Such as swapping out log levels, database connectionstrings, etc.
 
 ## Building
+So far I've managed to keep it simple - my go-to configuration is:
+```dockerfile
+FROM mcr.microsoft.com/dotnet/core/sdk:2.2 AS build-env
+COPY . ./
+RUN dotnet test
+RUN dotnet publish -c Release -o /out
 
+FROM mcr.microsoft.com/dotnet/core/runtime:2.2-alpine3.9
+COPY --from=build-env /out .
+ENTRYPOINT ["dotnet", "Program.dll"]
+```
+This configuration uses the larger SDK image for testing and publishing the service.
+Then it creates another image based on a lighter runtime image, by copying in the published program from the previous image.
 
-## Deploying
+# Conclusion
+There we have it - a runnable, stoppable, logging, configurable, linux-based .NET Core Docker service.
