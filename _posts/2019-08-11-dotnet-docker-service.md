@@ -3,15 +3,13 @@ layout: post
 title: Using .NET Core for Docker Services
 ---
 
-I recently implemented my first Docker image, intended to be used as a service: [Beehive](https://github.com/MikaelElkiaer/Beehive).
-I had previously used Topshelf to create .NET Windows services, but this time around I would like to create a .NET Core console app running as a service in a Linux-based image.
-This brought with it some interesting learnings.
-
-# Creating a service
+I recently implemented my first Docker image intended to be used as a service: [Beehive](https://github.com/MikaelElkiaer/Beehive).
+I have previously used Topshelf to create .NET Windows services, but this time around I would like to create a .NET Core console app running as a Docker service in a Linux-based image.
+This brought with it some interesting findings.
 
 ## Creating a stoppable service
-In the case of Beehive, I wanted to do an isolated loop, in order to not having to concern myself with managing state.
-I also wanted a way to stop the service, while having a chance to finish ongoing starts and perhaps do some cleaning up.
+In the case of Beehive, I wanted to do an isolated loop - in order to not having to concern myself with managing state.
+I also wanted a way to stop the service, while having a chance to finish ongoing scheduling and perhaps do some cleaning up.
 In order to achieve this, I stumbled upon a neat little trick of combining a while loop and a `CancellationToken`.
 
 Simply, a `CancellationToken` is an object you can provide for any `Task` that you start, so that you can check for `.IsCancellationRequested` and either exit prematurely, but gracefully, or throw an `OperationCanceledException` via `ThrowIfCancellationRequested()`.
@@ -36,13 +34,15 @@ This is fine for handling logic-related reasons to exit.
 But for this to be a real system-controllable service, we also need for it to react to signals.
 
 First up is the `Console.CancelKeyPress` event, which is fired when hitting Ctrl+C - corresponding to a SIGINT on Linux.
-This is useful for gracefully stopping the program - while running it directly, or while running it as a non-detached container.
+This is useful for gracefully stopping the program - while running it directly or while running it as a non-detached container.
 In the event handler, it is neccesary to set `ConsoleCancelEventArgs.Cancel` to true.
 If it is kept at its default (false) it will kill the process once the event handler is finished.
 If set to true, we get to do a graceful exit via the CancellationToken.
 
 Next up is the `AppDomain.ProcessExit` event - corresponding to a SIGTERM on Linux.
 This is fired after the cancel, but more importantly it is also fired by itself on a SIGTERM - e.g. whenever a container is stopped or restarted by the Docker daemon.
+
+Extending on the program above, we now have a stoppable service:
 ```csharp
 class Program
 {
@@ -76,7 +76,7 @@ class Program
 
 ### Creating a non-loop service
 In other cases, it might not be neccesary with a loop to have the service go forever.
-Perhaps the service starts some background threads for subscribing to a message queue or another asynchronous communication form.
+Perhaps the service starts some background threads for subscribing to a message queue or another asynchronous form of communication.
 
 For this it is possible to instead set up the background thread and then utilize `Task.Delay` again, but without an actual delay and instead only relying on the `CancellationToken` to stop the service.
 ```csharp
@@ -110,8 +110,8 @@ In order to set it up I prefer the programmatic approach over using a config fil
 public static ILogger CreateLogger(LogEventLevel visibleLogLevel)
 {
     return Log.Logger = new LoggerConfiguration()
-        .MinimumLevel.Is(visibleLogLevel)
-        .WriteTo.ColoredConsole(standardErrorFromLevel: LogEventLevel.Error)
+        .MinimumLevel.Is(visibleLogLevel) # Allow users to set log level
+        .WriteTo.ColoredConsole(standardErrorFromLevel: LogEventLevel.Error) # Send errors and fatals to stderr
         .CreateLogger();
 }
 ```
@@ -120,11 +120,11 @@ It might also be useful to let the minimum log level be controlled via an enviro
 Once that it is set up, all that needs to be done is use it - either via the globally available `Log.Logger` or by injecting the `ILogger` via a DI framework.
 
 ### Example
-A log entry created as such:
+A log entry is created as such:
 ```csharp
 logger.Information("Log event at {StartUtc:o}", DateTime.UtcNow)
 ```
-Will be outputted as:
+and will be outputted as:
 ```
 2019-08-11 20:14:49 INF Log event at 2019-08-11T18:14:49.8269445Z
 ```
@@ -150,5 +150,9 @@ ENTRYPOINT ["dotnet", "Program.dll"]
 This configuration uses the larger SDK image for testing and publishing the service.
 Then it creates another image based on a lighter runtime image, by copying in the published program from the previous image.
 
+I won't go into detail about how to deploy this.
+Personally, I am using Drone CI to publish my images to both a local registry and to Docker Hub.
+
 # Conclusion
 There we have it - a runnable, stoppable, logging, configurable, linux-based .NET Core Docker service.
+What is next up for me? Probably to create some kind of framework to contain this - probably something similar to Topshelf.
