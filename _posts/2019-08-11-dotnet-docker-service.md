@@ -94,7 +94,20 @@ async Task main(string[] args)
 ```
 
 ## Logging
+This section is about Serilog and how to take advantage of it for a console application running inside a container.
 
+The biggest advantage, compared to others, is that it follows the concept of structured logging.
+You might not get the full advantage, while logging to stdout/stderr, compared to logging to something like Elasticsearch, but some of the advantages are still there.
+
+1. Nicely formatted entries with timestamp and error level
+
+2. Type-based logging - including complex types
+
+3. Logging to stderr and stdout
+
+4. Global or DI-driven ILogger
+
+5. Colored output
 
 ## Configuration
 
